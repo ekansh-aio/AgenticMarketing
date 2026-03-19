@@ -7,13 +7,200 @@
  *  - Multiple types can be selected simultaneously.
  *  - Voicebot and Chatbot are locked until Website is selected.
  *  - Deselecting Website automatically removes Voicebot and Chatbot.
+ *
+ * Protocol Documents:
+ *  - Accepts PDF, DOCX, Markdown, TXT via drag-and-drop or file picker.
+ *  - Each file gets an auto-inferred doc_type (editable by user).
+ *  - Stored in form.protocol_docs as [{ file: File, doc_type: string }].
+ *  - TODO (backend wiring): before calling generateStrategy, upload each file
+ *    as a CompanyDocument with high priority so the curator treats them as
+ *    campaign-specific RAG context alongside the persisted SkillConfig.
  */
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageWithSidebar, SectionCard } from "../shared/Layout";
 import { adsAPI } from "../../services/api";
-import { Globe, Image, Bot, MessageSquare, Sparkles } from "lucide-react";
+import { Globe, Image, Bot, MessageSquare, Sparkles, FileText, X, Upload } from "lucide-react";
+
+// Accepted MIME types and their display labels
+const ACCEPTED_TYPES = {
+  "application/pdf":                                                  { ext: "PDF",  color: "#e74c3c" },
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { ext: "DOCX", color: "#2980b9" },
+  "text/markdown":                                                    { ext: "MD",   color: "#8e44ad" },
+  "text/plain":                                                       { ext: "TXT",  color: "#27ae60" },
+};
+const ACCEPT_STRING = Object.keys(ACCEPTED_TYPES).join(",") + ",.md,.txt";
+
+const DOC_TYPE_OPTIONS = [
+  { value: "product_description",   label: "Product / Service Description" },
+  { value: "campaign_requirements", label: "Campaign Requirements" },
+  { value: "targets",               label: "Targets & KPIs" },
+  { value: "audience_brief",        label: "Audience Brief" },
+  { value: "compliance",            label: "Compliance / Legal" },
+  { value: "other",                 label: "Other" },
+];
+
+/** Infer doc_type from filename as a convenience default */
+function inferDocType(filename) {
+  const lower = filename.toLowerCase();
+  if (lower.includes("product") || lower.includes("service") || lower.includes("usp")) return "product_description";
+  if (lower.includes("requirement") || lower.includes("brief"))                         return "campaign_requirements";
+  if (lower.includes("target") || lower.includes("kpi") || lower.includes("goal"))      return "targets";
+  if (lower.includes("audience") || lower.includes("persona"))                          return "audience_brief";
+  if (lower.includes("compliance") || lower.includes("legal") || lower.includes("policy")) return "compliance";
+  return "other";
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+/** Single protocol document row */
+function ProtocolDocRow({ doc, index, onChange, onRemove }) {
+  const typeInfo = ACCEPTED_TYPES[doc.file.type] ?? { ext: "FILE", color: "#7f8c8d" };
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "10px",
+      padding: "10px 12px", borderRadius: "8px",
+      border: "1px solid var(--color-card-border)",
+      backgroundColor: "var(--color-card-bg)",
+    }}>
+      {/* Type badge */}
+      <span style={{
+        fontSize: "0.65rem", fontWeight: 700, padding: "2px 6px",
+        borderRadius: "4px", backgroundColor: typeInfo.color + "22",
+        color: typeInfo.color, flexShrink: 0, letterSpacing: "0.04em",
+      }}>
+        {typeInfo.ext}
+      </span>
+
+      {/* File name + size */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{
+          fontSize: "0.8rem", fontWeight: 600, color: "var(--color-input-text)",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {doc.file.name}
+        </p>
+        <p style={{ fontSize: "0.7rem", color: "var(--color-sidebar-text)", marginTop: "1px" }}>
+          {formatBytes(doc.file.size)}
+        </p>
+      </div>
+
+      {/* Doc type selector */}
+      <select
+        value={doc.doc_type}
+        onChange={(e) => onChange(index, "doc_type", e.target.value)}
+        style={{
+          fontSize: "0.75rem", padding: "4px 8px", borderRadius: "6px",
+          border: "1px solid var(--color-card-border)",
+          backgroundColor: "var(--color-input-bg, var(--color-card-bg))",
+          color: "var(--color-input-text)",
+          flexShrink: 0, maxWidth: "180px",
+        }}
+      >
+        {DOC_TYPE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+
+      {/* Remove */}
+      <button
+        onClick={() => onRemove(index)}
+        style={{
+          background: "none", border: "none", cursor: "pointer",
+          color: "var(--color-sidebar-text)", padding: "2px", flexShrink: 0,
+          display: "flex", alignItems: "center",
+        }}
+        title="Remove"
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
+/** Drop zone + file list for protocol documents */
+function ProtocolDocsSection({ docs, onAdd, onChange, onRemove }) {
+  const [dragging, setDragging] = React.useState(false);
+
+  const processFiles = (fileList) => {
+    const incoming = Array.from(fileList).filter((f) => {
+      // Accept by MIME or by extension fallback for .md
+      if (ACCEPTED_TYPES[f.type]) return true;
+      if (f.name.endsWith(".md") || f.name.endsWith(".txt")) return true;
+      return false;
+    });
+    const newDocs = incoming.map((file) => ({
+      file,
+      doc_type: inferDocType(file.name),
+    }));
+    onAdd(newDocs);
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    processFiles(e.dataTransfer.files);
+  };
+
+  const onInputChange = (e) => {
+    processFiles(e.target.files);
+    e.target.value = ""; // reset so same file can be re-added after removal
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Drop zone */}
+      <label
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        style={{
+          display: "flex", flexDirection: "column", alignItems: "center",
+          justifyContent: "center", gap: "8px",
+          padding: "28px 20px", borderRadius: "10px",
+          border: `2px dashed ${dragging ? "var(--color-accent)" : "var(--color-card-border)"}`,
+          backgroundColor: dragging ? "var(--color-accent-subtle)" : "transparent",
+          cursor: "pointer", transition: "border-color 0.15s, background-color 0.15s",
+        }}
+      >
+        <input
+          type="file"
+          multiple
+          accept={ACCEPT_STRING}
+          onChange={onInputChange}
+          style={{ display: "none" }}
+        />
+        <Upload size={22} style={{ color: dragging ? "var(--color-accent)" : "var(--color-sidebar-text)" }} />
+        <p style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--color-input-text)", textAlign: "center" }}>
+          Drag & drop files here, or <span style={{ color: "var(--color-accent)", textDecoration: "underline" }}>browse</span>
+        </p>
+        <p style={{ fontSize: "0.7rem", color: "var(--color-sidebar-text)", textAlign: "center" }}>
+          Accepts PDF, DOCX, Markdown, TXT — multiple files allowed
+        </p>
+      </label>
+
+      {/* File list */}
+      {docs.length > 0 && (
+        <div className="space-y-2">
+          {docs.map((doc, i) => (
+            <ProtocolDocRow
+              key={i}
+              doc={doc}
+              index={i}
+              onChange={onChange}
+              onRemove={onRemove}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Extracts a human-readable message from any thrown value.
  *  Handles: Error instances, FastAPI {detail: string|[...]}, plain objects, strings. */
@@ -55,7 +242,19 @@ export default function CampaignCreator() {
     budget: "",
     platforms: [],
     target_audience: { age_range: "", gender: "", interests: "" },
+    protocol_docs: [],   // [{ file: File, doc_type: string }]
   });
+
+  // Protocol docs helpers
+  const addProtocolDocs   = (incoming) => setForm((p) => ({ ...p, protocol_docs: [...p.protocol_docs, ...incoming] }));
+  const updateProtocolDoc = (idx, key, val) => setForm((p) => {
+    const updated = [...p.protocol_docs];
+    updated[idx] = { ...updated[idx], [key]: val };
+    return { ...p, protocol_docs: updated };
+  });
+  const removeProtocolDoc = (idx) => setForm((p) => ({
+    ...p, protocol_docs: p.protocol_docs.filter((_, i) => i !== idx),
+  }));
 
   const update = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
@@ -100,6 +299,10 @@ export default function CampaignCreator() {
         budget:   form.budget ? parseFloat(form.budget) : null,
         platforms: form.platforms,
         target_audience: form.target_audience,
+        // TODO: when wiring to real API, upload each protocol_doc as a CompanyDocument
+        // (doc_type, title = file.name, content = extracted text) before calling generateStrategy.
+        // These docs get HIGH PRIORITY in the curator's RAG context alongside existing SkillConfig.
+        protocol_docs: form.protocol_docs.map((d) => ({ name: d.file.name, doc_type: d.doc_type, size: d.file.size })),
         status:   "draft",
       };
       setCreatedAd(ad);
@@ -233,6 +436,19 @@ export default function CampaignCreator() {
             </div>
           </SectionCard>
 
+          {/* Protocol Documents */}
+          <SectionCard
+            title="Protocol Documents"
+            subtitle="Upload product/service descriptions, campaign requirements, targets, or any brief. The AI curator uses these as high-priority context when generating your strategy."
+          >
+            <ProtocolDocsSection
+              docs={form.protocol_docs}
+              onAdd={addProtocolDocs}
+              onChange={updateProtocolDoc}
+              onRemove={removeProtocolDoc}
+            />
+          </SectionCard>
+
           {/* Target Platforms */}
           <SectionCard title="Target Platforms">
             <div className="flex flex-wrap gap-2">
@@ -290,7 +506,10 @@ export default function CampaignCreator() {
             </div>
             <p className="text-sm" style={{ color: "var(--color-sidebar-text)" }}>
               Campaign created with: <strong>{createdAd.ad_types?.join(", ")}</strong>.
-              Generate an AI marketing strategy and submit for review?
+              {createdAd.protocol_docs?.length > 0 && (
+                <> <strong>{createdAd.protocol_docs.length} protocol document{createdAd.protocol_docs.length > 1 ? "s" : ""}</strong> attached as AI context.</>
+              )}
+              {" "}Generate an AI marketing strategy and submit for review?
             </p>
             <button onClick={handleGenerate} disabled={generating} className="btn--accent px-8 py-2.5">
               {generating ? <><span className="spinner" /> AI is generating strategy…</> : "Generate Strategy & Submit for Review"}
