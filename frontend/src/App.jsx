@@ -29,6 +29,7 @@ import EthicsDashboard from "./components/ethics/EthicsDashboard";
 
 // Publisher
 import PublisherDashboard from "./components/publisher/PublisherDashboard";
+import PublisherSettings  from "./components/publisher/PublisherSettings";
 
 // Analytics (shared)
 import AnalyticsPage from "./components/analytics/AnalyticsPage";
@@ -70,6 +71,7 @@ function AppRoutes() {
       <Route path="/publisher/deploy" element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherDashboard /></ProtectedRoute>} />
       <Route path="/publisher/distribute" element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherDashboard /></ProtectedRoute>} />
       <Route path="/publisher/analytics" element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherDashboard /></ProtectedRoute>} />
+      <Route path="/publisher/settings"  element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherSettings /></ProtectedRoute>} />
 
       {/* Unauthorized */}
       <Route path="/unauthorized" element={

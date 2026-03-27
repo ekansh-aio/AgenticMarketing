@@ -8,139 +8,117 @@
  *   /publisher/deploy    → Deploy     — push generated websites to Vercel/Netlify/Render/GitHub Pages/custom domain
  *   /publisher/distribute→ Distribute — post ad creatives to Meta/YouTube/LinkedIn/Twitter/TikTok/etc
  *   /publisher/analytics → Analytics  — optimizer + performance
+ *   /publisher/settings  → Settings   — manage platform credential profiles (separate page)
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PageWithSidebar, SectionCard, MetricSummaryCard, CampaignStatusBadge } from "../shared/Layout";
 import { adsAPI, analyticsAPI } from "../../services/api";
+import { DEPLOY_PLATFORMS, SOCIAL_PLATFORMS, loadProfiles } from "./platformConfig";
 import {
   Send, Globe, Image, BarChart3, Play, Sparkles,
   CheckCircle, Rocket, ChevronDown, ChevronUp, Zap, X, ImageOff,
   Share2, UploadCloud, ExternalLink, Download, Eye, AlertCircle,
-  CheckCircle2, Loader2,
+  CheckCircle2, Loader2, Settings, TrendingUp, Users, DollarSign, Calendar,
+  RotateCcw,
 } from "lucide-react";
 
+// ─── Progress utilities ───────────────────────────────────────────────────────
+function useProgressMap() {
+  const [map, setMap] = useState({});
+  const timers  = useRef({});
+  const started = useRef({});
+
+  const tick = useCallback((key, durMs) => {
+    const elapsed = Date.now() - started.current[key];
+    const pct = Math.min(92, 92 * (1 - Math.exp(-(elapsed / durMs) * 2)));
+    setMap((m) => ({ ...m, [key]: Math.round(pct) }));
+  }, []);
+
+  const start = useCallback((key, estimatedMs = 20000) => {
+    if (timers.current[key]) clearInterval(timers.current[key]);
+    started.current[key] = Date.now();
+    setMap((m) => ({ ...m, [key]: 2 }));
+    timers.current[key] = setInterval(() => tick(key, estimatedMs), 250);
+  }, [tick]);
+
+  const complete = useCallback((key) => {
+    clearInterval(timers.current[key]);
+    setMap((m) => ({ ...m, [key]: 100 }));
+    setTimeout(() => setMap((m) => { const n = { ...m }; delete n[key]; return n; }), 700);
+  }, []);
+
+  const fail = useCallback((key) => {
+    clearInterval(timers.current[key]);
+    setMap((m) => { const n = { ...m }; delete n[key]; return n; });
+  }, []);
+
+  useEffect(() => () => Object.values(timers.current).forEach(clearInterval), []);
+  return { map, start, complete, fail };
+}
+
+function useGenerateProgress() {
+  const [progress, setProgress] = useState(0);
+  const timerRef   = useRef(null);
+  const startedAt  = useRef(null);
+  const durationMs = useRef(20000);
+
+  const tick = useCallback(() => {
+    const elapsed = Date.now() - startedAt.current;
+    const pct = Math.min(92, 92 * (1 - Math.exp(-(elapsed / durationMs.current) * 2)));
+    setProgress(Math.round(pct));
+  }, []);
+
+  const start = useCallback((estimatedMs = 20000) => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    startedAt.current  = Date.now();
+    durationMs.current = estimatedMs;
+    setProgress(2);
+    timerRef.current = setInterval(tick, 250);
+  }, [tick]);
+
+  const complete = useCallback(() => {
+    clearInterval(timerRef.current);
+    setProgress(100);
+    setTimeout(() => setProgress(0), 700);
+  }, []);
+
+  const fail = useCallback(() => {
+    clearInterval(timerRef.current);
+    setProgress(0);
+  }, []);
+
+  useEffect(() => () => clearInterval(timerRef.current), []);
+  return { progress, start, complete, fail };
+}
+
+function InlineProgress({ progress }) {
+  if (!progress) return null;
+  const done = progress === 100;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <div style={{
+        width: "100px", height: "4px",
+        background: "rgba(0,0,0,0.08)", borderRadius: "50px", overflow: "hidden",
+      }}>
+        <div style={{
+          height: "100%", width: `${progress}%`,
+          background: "var(--color-accent)",
+          borderRadius: "50px",
+          transition: "width 0.25s ease",
+        }} />
+      </div>
+      <span style={{ fontSize: "0.7rem", fontWeight: 600, color: "var(--color-accent)", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+        {done ? "✓" : `${progress}%`}
+      </span>
+    </div>
+  );
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const hasType = (ad, type) => Array.isArray(ad.ad_type) ? ad.ad_type.includes(type) : ad.ad_type === type;
+const hasType  = (ad, type) => Array.isArray(ad.ad_type) ? ad.ad_type.includes(type) : ad.ad_type === type;
 const typeLabel = (ad) => (Array.isArray(ad.ad_type) ? ad.ad_type : [ad.ad_type]).join(", ");
-
-// ─── Deploy platform definitions ─────────────────────────────────────────────
-const DEPLOY_PLATFORMS = [
-  {
-    id: "vercel",
-    label: "Vercel",
-    description: "Deploy to Vercel edge network",
-    fields: [
-      { key: "token",        label: "Vercel Token",     type: "password", placeholder: "eyJhbGci…" },
-      { key: "project_name", label: "Project Name",     type: "text",     placeholder: "my-campaign" },
-    ],
-  },
-  {
-    id: "netlify",
-    label: "Netlify",
-    description: "Deploy to Netlify CDN",
-    fields: [
-      { key: "token",     label: "Personal Access Token", type: "password", placeholder: "nfp_…" },
-      { key: "site_name", label: "Site Name (optional)",  type: "text",     placeholder: "my-campaign" },
-    ],
-  },
-  {
-    id: "render",
-    label: "Render",
-    description: "Deploy to Render static sites",
-    fields: [
-      { key: "api_key",    label: "API Key",    type: "password", placeholder: "rnd_…" },
-      { key: "service_id", label: "Service ID", type: "text",     placeholder: "srv-…" },
-    ],
-  },
-  {
-    id: "github_pages",
-    label: "GitHub Pages",
-    description: "Host on GitHub Pages",
-    fields: [
-      { key: "token",  label: "GitHub Token", type: "password", placeholder: "ghp_…" },
-      { key: "repo",   label: "Repository",   type: "text",     placeholder: "username/repo" },
-      { key: "branch", label: "Branch",       type: "text",     placeholder: "gh-pages" },
-    ],
-  },
-  {
-    id: "custom",
-    label: "Custom Domain",
-    description: "Deploy via FTP/SFTP to your own server",
-    fields: [
-      { key: "domain",       label: "Domain",                type: "text",     placeholder: "https://mysite.com" },
-      { key: "ftp_host",     label: "FTP/SFTP Host",         type: "text",     placeholder: "ftp.mysite.com" },
-      { key: "ftp_user",     label: "Username",              type: "text",     placeholder: "" },
-      { key: "ftp_pass",     label: "Password",              type: "password", placeholder: "" },
-      { key: "remote_path",  label: "Remote Path (optional)", type: "text",    placeholder: "/public_html" },
-    ],
-  },
-];
-
-// ─── Social distribution platform definitions ────────────────────────────────
-const SOCIAL_PLATFORMS = {
-  "Google Ads": {
-    id: "google_ads",
-    fields: [
-      { key: "customer_id",      label: "Customer ID",      type: "text",     placeholder: "123-456-7890" },
-      { key: "developer_token",  label: "Developer Token",  type: "password", placeholder: "" },
-      { key: "campaign_name",    label: "Campaign Name",    type: "text",     placeholder: "Q2 Launch" },
-    ],
-  },
-  "Meta/Instagram": {
-    id: "meta",
-    fields: [
-      { key: "access_token",  label: "Access Token",  type: "password", placeholder: "EAA…" },
-      { key: "ad_account_id", label: "Ad Account ID", type: "text",     placeholder: "act_…" },
-      { key: "caption",       label: "Caption",       type: "textarea", placeholder: "Discover our latest…" },
-      { key: "hashtags",      label: "Hashtags",      type: "text",     placeholder: "#brand #campaign" },
-    ],
-  },
-  "YouTube": {
-    id: "youtube",
-    fields: [
-      { key: "api_key",     label: "YouTube API Key", type: "password", placeholder: "AIza…" },
-      { key: "channel_id",  label: "Channel ID",      type: "text",     placeholder: "UC…" },
-      { key: "title",       label: "Ad Title",        type: "text",     placeholder: "Campaign Title" },
-      { key: "description", label: "Description",     type: "textarea", placeholder: "" },
-    ],
-  },
-  "LinkedIn": {
-    id: "linkedin",
-    fields: [
-      { key: "access_token",    label: "Access Token",    type: "password", placeholder: "" },
-      { key: "organization_id", label: "Organization URN", type: "text",    placeholder: "urn:li:organization:…" },
-      { key: "caption",         label: "Post Caption",    type: "textarea", placeholder: "" },
-    ],
-  },
-  "Twitter/X": {
-    id: "twitter",
-    fields: [
-      { key: "api_key",      label: "API Key",      type: "password", placeholder: "" },
-      { key: "api_secret",   label: "API Secret",   type: "password", placeholder: "" },
-      { key: "access_token", label: "Access Token", type: "password", placeholder: "" },
-      { key: "tweet_text",   label: "Tweet Text",   type: "textarea", placeholder: "Check out our latest…" },
-    ],
-  },
-  "TikTok": {
-    id: "tiktok",
-    fields: [
-      { key: "access_token",  label: "Access Token",  type: "password", placeholder: "" },
-      { key: "advertiser_id", label: "Advertiser ID", type: "text",     placeholder: "" },
-    ],
-  },
-  "Email": {
-    id: "email",
-    fields: [
-      { key: "smtp_host",       label: "SMTP Host",                     type: "text",     placeholder: "smtp.gmail.com" },
-      { key: "smtp_port",       label: "Port",                          type: "text",     placeholder: "587" },
-      { key: "from_email",      label: "From Email",                    type: "text",     placeholder: "hello@company.com" },
-      { key: "subject",         label: "Email Subject",                 type: "text",     placeholder: "Campaign Launch!" },
-      { key: "recipient_list",  label: "Recipients (comma-separated)",  type: "textarea", placeholder: "user@example.com, …" },
-    ],
-  },
-};
 
 // ─── Tab ↔ Path maps ──────────────────────────────────────────────────────────
 const PATH_TO_TAB = {
@@ -167,14 +145,18 @@ export default function PublisherDashboard() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [ads,       setAds]       = useState([]);
-  const [loading,   setLoading]   = useState(true);
+  const [ads,     setAds]     = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Platform credential profiles (loaded from localStorage)
+  const [profiles] = useState(loadProfiles);
 
   // Overview state
   const [publishing,  setPublishing]  = useState(null);
   const [generating,  setGenerating]  = useState(null);
   const [expandedId,  setExpandedId]  = useState(null);
   const [previewAd,   setPreviewAd]   = useState(null);
+  const genProgress = useProgressMap();
 
   // Deploy state
   const [deployExpanded, setDeployExpanded] = useState(null); // { adId, platformId }
@@ -192,7 +174,7 @@ export default function PublisherDashboard() {
     adsAPI.list().then(setAds).catch(console.error).finally(() => setLoading(false));
   }, []);
 
-  const approved  = ads.filter((a) => a.status === "approved");
+  const approved  = ads.filter((a) => a.status === "ethics_cleared");
   const published = ads.filter((a) => a.status === "published");
 
   // ── Overview handlers ────────────────────────────────────────────────────
@@ -206,20 +188,26 @@ export default function PublisherDashboard() {
   };
 
   const handleGenerateCreatives = async (adId) => {
+    const key = `${adId}_creatives`;
     setGenerating({ id: adId, type: "creatives" });
+    genProgress.start(key, 60000);
     try {
       const updated = await adsAPI.generateCreatives(adId);
+      genProgress.complete(key);
       setAds((p) => p.map((a) => (a.id === adId ? updated : a)));
-    } catch (err) { alert(err.message); }
+    } catch (err) { genProgress.fail(key); alert(err.message); }
     finally { setGenerating(null); }
   };
 
   const handleGenerateWebsite = async (adId) => {
+    const key = `${adId}_website`;
     setGenerating({ id: adId, type: "website" });
+    genProgress.start(key, 35000);
     try {
       const updated = await adsAPI.generateWebsite(adId);
+      genProgress.complete(key);
       setAds((p) => p.map((a) => (a.id === adId ? updated : a)));
-    } catch (err) { alert(err.message); }
+    } catch (err) { genProgress.fail(key); alert(err.message); }
     finally { setGenerating(null); }
   };
 
@@ -235,10 +223,17 @@ export default function PublisherDashboard() {
   };
 
   const handleDeploy = async (adId, platform) => {
-    const fk = `${adId}_${platform.id}`;
+    const fk         = `${adId}_${platform.id}`;
+    const formValues = deployForms[fk] || {};
+    const profileId  = formValues.__profileId;
+    const profile    = (profiles[platform.id] || []).find((p) => p.id === profileId) || {};
+    const { id: _id, name: _name, ...profileCreds } = profile;
+    const config = { ...profileCreds, ...formValues };
+    delete config.__profileId;
+
     setDeployStatus((p) => ({ ...p, [fk]: { status: "deploying" } }));
     try {
-      const result = await adsAPI.deployWebsite(adId, { platform: platform.id, config: deployForms[fk] || {} });
+      const result = await adsAPI.deployWebsite(adId, { platform: platform.id, config });
       setDeployStatus((p) => ({ ...p, [fk]: { status: "deployed", url: result?.url } }));
     } catch (err) {
       setDeployStatus((p) => ({ ...p, [fk]: { status: "error", error: err.message } }));
@@ -257,10 +252,28 @@ export default function PublisherDashboard() {
   };
 
   const handleDistribute = async (adId, platformConfig) => {
-    const fk = `${adId}_${platformConfig.id}`;
+    const fk         = `${adId}_${platformConfig.id}`;
+    const formValues = distForms[fk] || {};
+    const profileId  = formValues.__profileId;
+    const profile    = (profiles[platformConfig.id] || []).find((p) => p.id === profileId) || {};
+    const { id: _id, name: _name, ...profileCreds } = profile;
+    const config = { ...profileCreds, ...formValues };
+    delete config.__profileId;
+    // Surface audience targeting as a structured object for the backend
+    if (config.target_age || config.target_gender || config.target_location || config.target_interests) {
+      config.audience = {
+        age_range:  config.target_age       || null,
+        gender:     config.target_gender    || null,
+        location:   config.target_location  || null,
+        interests:  config.target_interests || null,
+      };
+    }
+    delete config.target_age; delete config.target_gender;
+    delete config.target_location; delete config.target_interests;
+
     setDistStatus((p) => ({ ...p, [fk]: { status: "posting" } }));
     try {
-      await adsAPI.distributeCreatives(adId, { platform: platformConfig.id, config: distForms[fk] || {} });
+      await adsAPI.distributeCreatives(adId, { platform: platformConfig.id, config });
       setDistStatus((p) => ({ ...p, [fk]: { status: "posted" } }));
     } catch (err) {
       setDistStatus((p) => ({ ...p, [fk]: { status: "error", error: err.message } }));
@@ -284,6 +297,13 @@ export default function PublisherDashboard() {
           <h1 className="page-header__title">Publisher Dashboard</h1>
           <p className="page-header__subtitle">Publish campaigns, deploy websites, and distribute creatives</p>
         </div>
+        <button
+          onClick={() => navigate("/publisher/settings")}
+          className="btn--ghost"
+          style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+        >
+          <Settings size={14} /> Platform Settings
+        </button>
       </div>
 
       {/* KPI row */}
@@ -314,6 +334,7 @@ export default function PublisherDashboard() {
           published={published}
           publishing={publishing}
           generating={generating}
+          progressMap={genProgress.map}
           expandedId={expandedId}
           onToggle={(id) => setExpandedId((p) => (p === id ? null : id))}
           onPublish={handlePublish}
@@ -327,7 +348,9 @@ export default function PublisherDashboard() {
       {activeTab === "deploy" && (
         <DeployTab
           ads={ads}
+          profiles={profiles}
           generating={generating}
+          progressMap={genProgress.map}
           deployExpanded={deployExpanded}
           deployForms={deployForms}
           deployStatus={deployStatus}
@@ -342,7 +365,9 @@ export default function PublisherDashboard() {
       {activeTab === "distribute" && (
         <DistributeTab
           ads={ads}
+          profiles={profiles}
           generating={generating}
+          progressMap={genProgress.map}
           distExpanded={distExpanded}
           distForms={distForms}
           distStatus={distStatus}
@@ -355,7 +380,12 @@ export default function PublisherDashboard() {
       )}
 
       {/* ── Analytics ── */}
-      {activeTab === "analytics" && <PublisherAnalytics ads={published} />}
+      {activeTab === "analytics" && (
+        <PublisherAnalytics
+          ads={published}
+          onAdUpdated={(updated) => setAds((p) => p.map((a) => (a.id === updated.id ? updated : a)))}
+        />
+      )}
 
       {/* Ad Preview Modal */}
       {previewAd && <AdPreviewModal ad={previewAd} onClose={() => setPreviewAd(null)} />}
@@ -364,7 +394,7 @@ export default function PublisherDashboard() {
 }
 
 // ─── Overview Tab ─────────────────────────────────────────────────────────────
-function OverviewTab({ approved, published, publishing, generating, expandedId, onToggle, onPublish, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
+function OverviewTab({ approved, published, publishing, generating, progressMap, expandedId, onToggle, onPublish, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
   return (
     <div className="space-y-4">
       <SectionCard
@@ -385,7 +415,7 @@ function OverviewTab({ approved, published, publishing, generating, expandedId, 
             <CampaignRow
               key={ad.id} ad={ad}
               expanded={expandedId === ad.id} onToggle={() => onToggle(ad.id)}
-              publishing={publishing} generating={generating}
+              publishing={publishing} generating={generating} progressMap={progressMap}
               onPublish={onPublish} onGenerateCreatives={onGenerateCreatives}
               onGenerateWebsite={onGenerateWebsite} onPreviewAd={onPreviewAd}
             />
@@ -404,7 +434,7 @@ function OverviewTab({ approved, published, publishing, generating, expandedId, 
             <CampaignRow
               key={ad.id} ad={ad}
               expanded={expandedId === ad.id} onToggle={() => onToggle(ad.id)}
-              publishing={publishing} generating={generating}
+              publishing={publishing} generating={generating} progressMap={progressMap}
               onPublish={onPublish} onGenerateCreatives={onGenerateCreatives}
               onGenerateWebsite={onGenerateWebsite} onPreviewAd={onPreviewAd}
             />
@@ -415,7 +445,7 @@ function OverviewTab({ approved, published, publishing, generating, expandedId, 
   );
 }
 
-function CampaignRow({ ad, expanded, onToggle, publishing, generating, onPublish, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
+function CampaignRow({ ad, expanded, onToggle, publishing, generating, progressMap, onPublish, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
   const isLive = ad.status === "published";
   return (
     <div>
@@ -446,7 +476,7 @@ function CampaignRow({ ad, expanded, onToggle, publishing, generating, onPublish
       </div>
       {expanded && (
         <CampaignDetailPanel
-          ad={ad} generating={generating}
+          ad={ad} generating={generating} progressMap={progressMap}
           onGenerateCreatives={onGenerateCreatives}
           onGenerateWebsite={onGenerateWebsite}
           onPreviewAd={onPreviewAd}
@@ -456,9 +486,9 @@ function CampaignRow({ ad, expanded, onToggle, publishing, generating, onPublish
   );
 }
 
-function CampaignDetailPanel({ ad, generating, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
-  const isWebsite         = hasType(ad, "website");
-  const isAds             = hasType(ad, "ads");
+function CampaignDetailPanel({ ad, generating, progressMap, onGenerateCreatives, onGenerateWebsite, onPreviewAd }) {
+  const isWebsite           = hasType(ad, "website");
+  const isAds               = hasType(ad, "ads");
   const generatingWebsite   = generating?.id === ad.id && generating?.type === "website";
   const generatingCreatives = generating?.id === ad.id && generating?.type === "creatives";
 
@@ -469,7 +499,7 @@ function CampaignDetailPanel({ ad, generating, onGenerateCreatives, onGenerateWe
         <div className="mb-4">
           <p className="pub-campaign-detail__section-label">Generated Website</p>
           {ad.output_url ? (
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <a href={adsAPI.websitePreviewUrl(ad.id)} target="_blank" rel="noreferrer" className="btn--inline-action--success">
                 <Eye size={11} /> Preview
               </a>
@@ -479,13 +509,15 @@ function CampaignDetailPanel({ ad, generating, onGenerateCreatives, onGenerateWe
               <button className="btn--inline-action--ghost" disabled={generatingWebsite} onClick={() => onGenerateWebsite(ad.id)}>
                 {generatingWebsite ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</> : "Regenerate"}
               </button>
+              {generatingWebsite && <InlineProgress progress={progressMap?.[`${ad.id}_website`]} />}
             </div>
           ) : (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <p className="text-xs flex-1" style={{ color: "var(--color-sidebar-text)" }}>Website not generated yet</p>
               <button className="btn--inline-action--success" disabled={generatingWebsite} onClick={() => onGenerateWebsite(ad.id)}>
                 {generatingWebsite ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</> : <><Zap size={12} /> Generate Website</>}
               </button>
+              {generatingWebsite && <InlineProgress progress={progressMap?.[`${ad.id}_website`]} />}
             </div>
           )}
         </div>
@@ -495,20 +527,22 @@ function CampaignDetailPanel({ ad, generating, onGenerateCreatives, onGenerateWe
         <div className="mb-4">
           <p className="pub-campaign-detail__section-label">Generated Creatives</p>
           {ad.output_files?.length > 0 ? (
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button className="btn--inline-action--accent" onClick={() => onPreviewAd(ad)}>
                 <Eye size={11} /> Preview
               </button>
               <button className="btn--inline-action--ghost" disabled={generatingCreatives} onClick={() => onGenerateCreatives(ad.id)}>
                 {generatingCreatives ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</> : "Regenerate"}
               </button>
+              {generatingCreatives && <InlineProgress progress={progressMap?.[`${ad.id}_creatives`]} />}
             </div>
           ) : (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <p className="text-xs flex-1" style={{ color: "var(--color-sidebar-text)" }}>Ad creatives not generated yet</p>
               <button className="btn--inline-action--accent" disabled={generatingCreatives} onClick={() => onGenerateCreatives(ad.id)}>
                 {generatingCreatives ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</> : <><Zap size={12} /> Generate Creatives</>}
               </button>
+              {generatingCreatives && <InlineProgress progress={progressMap?.[`${ad.id}_creatives`]} />}
             </div>
           )}
         </div>
@@ -564,9 +598,9 @@ function InlineBotConfig({ ad }) {
 }
 
 // ─── Deploy Tab ───────────────────────────────────────────────────────────────
-function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus, onSelectPlatform, onUpdateForm, onDeploy, onGenerateWebsite }) {
+function DeployTab({ ads, profiles, generating, progressMap, deployExpanded, deployForms, deployStatus, onSelectPlatform, onUpdateForm, onDeploy, onGenerateWebsite }) {
   const deployable = ads.filter(
-    (a) => (a.status === "approved" || a.status === "published") && hasType(a, "website")
+    (a) => (a.status === "ethics_cleared" || a.status === "published") && hasType(a, "website")
   );
 
   if (deployable.length === 0) {
@@ -614,10 +648,13 @@ function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus,
                   ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</>
                   : "Regenerate"}
               </button>
+              {generating?.id === ad.id && generating?.type === "website" && (
+                <InlineProgress progress={progressMap?.[`${ad.id}_website`]} />
+              )}
             </div>
           ) : (
             <div style={{
-              display: "flex", alignItems: "center", gap: "12px",
+              display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap",
               padding: "12px 16px", borderRadius: "10px", marginBottom: "20px",
               border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-page-bg)",
             }}>
@@ -634,6 +671,9 @@ function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus,
                   ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</>
                   : <><Zap size={11} /> Generate Website</>}
               </button>
+              {generating?.id === ad.id && generating?.type === "website" && (
+                <InlineProgress progress={progressMap?.[`${ad.id}_website`]} />
+              )}
             </div>
           )}
 
@@ -643,14 +683,16 @@ function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus,
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "10px", marginBottom: "16px" }}>
             {DEPLOY_PLATFORMS.map((platform) => {
-              const isSelected = deployExpanded?.adId === ad.id && deployExpanded?.platformId === platform.id;
-              const status     = deployStatus[`${ad.id}_${platform.id}`];
+              const isSelected    = deployExpanded?.adId === ad.id && deployExpanded?.platformId === platform.id;
+              const status        = deployStatus[`${ad.id}_${platform.id}`];
+              const profileCount  = (profiles[platform.id] || []).length;
               return (
                 <DeployPlatformTile
                   key={platform.id}
                   platform={platform}
                   selected={isSelected}
                   status={status}
+                  profileCount={profileCount}
                   disabled={!ad.output_url}
                   onClick={() => onSelectPlatform(ad.id, platform.id)}
                 />
@@ -666,6 +708,7 @@ function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus,
             return (
               <DeployConfigForm
                 platform={platform}
+                profiles={profiles}
                 formData={deployForms[fk] || {}}
                 status={deployStatus[fk]}
                 onChange={(key, val) => onUpdateForm(ad.id, platform.id, key, val)}
@@ -679,7 +722,7 @@ function DeployTab({ ads, generating, deployExpanded, deployForms, deployStatus,
   );
 }
 
-function DeployPlatformTile({ platform, selected, status, disabled, onClick }) {
+function DeployPlatformTile({ platform, selected, status, profileCount, disabled, onClick }) {
   const isDeployed = status?.status === "deployed";
   return (
     <button
@@ -703,20 +746,23 @@ function DeployPlatformTile({ platform, selected, status, disabled, onClick }) {
       <span style={{ fontSize: "0.7rem", color: "var(--color-sidebar-text)", lineHeight: 1.3 }}>
         {platform.description}
       </span>
+      {profileCount > 0 && (
+        <span style={{ fontSize: "0.65rem", fontWeight: 600, color: "var(--color-accent)", marginTop: "2px" }}>
+          {profileCount} profile{profileCount !== 1 ? "s" : ""}
+        </span>
+      )}
     </button>
   );
 }
 
-function DeployConfigForm({ platform, formData, status, onChange, onDeploy }) {
+function DeployConfigForm({ platform, profiles, formData, status, onChange, onDeploy }) {
+  const navigate         = useNavigate();
+  const platformProfiles = profiles[platform.id] || [];
+  const selectedProfileId = formData.__profileId;
   const isDeploying = status?.status === "deploying";
   const isDeployed  = status?.status === "deployed";
   const isError     = status?.status === "error";
 
-  const inputStyle = {
-    width: "100%", padding: "8px 12px", borderRadius: "8px", fontSize: "0.83rem",
-    border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-input-bg)",
-    color: "var(--color-input-text)", outline: "none", fontFamily: "inherit",
-  };
   const labelStyle = {
     fontSize: "0.72rem", fontWeight: 600, color: "var(--color-sidebar-text)",
     display: "block", marginBottom: "5px",
@@ -728,22 +774,54 @@ function DeployConfigForm({ platform, formData, status, onChange, onDeploy }) {
       border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-page-bg)",
     }}>
       <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--color-input-text)", marginBottom: "16px" }}>
-        Configure {platform.label}
+        Deploy to {platform.label}
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "12px", marginBottom: "16px" }}>
-        {platform.fields.map((field) => (
-          <div key={field.key}>
-            <label style={labelStyle}>{field.label}</label>
-            <input
-              type={field.type}
-              style={inputStyle}
-              placeholder={field.placeholder}
-              value={formData[field.key] || ""}
-              onChange={(e) => onChange(field.key, e.target.value)}
-            />
+
+      {/* Profile selector — or prompt to create one */}
+      {platformProfiles.length === 0 ? (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "12px",
+          padding: "14px 16px", borderRadius: "10px", marginBottom: "16px",
+          border: "1px dashed var(--color-card-border)",
+          backgroundColor: "var(--color-card-bg)",
+        }}>
+          <AlertCircle size={15} style={{ color: "var(--color-sidebar-text)", flexShrink: 0 }} />
+          <p style={{ fontSize: "0.83rem", color: "var(--color-sidebar-text)", flex: 1 }}>
+            No profiles saved for <strong>{platform.label}</strong>. Add credentials in Settings first.
+          </p>
+          <button
+            onClick={() => navigate("/publisher/settings")}
+            className="btn--inline-action--accent"
+            style={{ whiteSpace: "nowrap" }}
+          >
+            <Settings size={12} /> Go to Settings
+          </button>
+        </div>
+      ) : (
+        <div style={{ marginBottom: "16px" }}>
+          <label style={labelStyle}>Select Profile</label>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <select
+              value={selectedProfileId || ""}
+              onChange={(e) => onChange("__profileId", e.target.value)}
+              className="field-select"
+              style={{ flex: 1 }}
+            >
+              <option value="">— choose a profile —</option>
+              {platformProfiles.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => navigate("/publisher/settings")}
+              className="btn--inline-action--ghost"
+              style={{ whiteSpace: "nowrap" }}
+            >
+              Manage
+            </button>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       {isError && (
         <div style={{ display: "flex", gap: "8px", padding: "10px 12px", borderRadius: "8px", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", marginBottom: "12px" }}>
@@ -768,9 +846,9 @@ function DeployConfigForm({ platform, formData, status, onChange, onDeploy }) {
 
       <button
         onClick={onDeploy}
-        disabled={isDeploying}
+        disabled={isDeploying || !selectedProfileId}
         className="btn--accent"
-        style={{ display: "inline-flex", alignItems: "center", gap: "8px", opacity: isDeploying ? 0.7 : 1 }}
+        style={{ display: "inline-flex", alignItems: "center", gap: "8px", opacity: (isDeploying || !selectedProfileId) ? 0.55 : 1 }}
       >
         {isDeploying
           ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />
@@ -781,10 +859,39 @@ function DeployConfigForm({ platform, formData, status, onChange, onDeploy }) {
   );
 }
 
+// ─── Forecast helpers ─────────────────────────────────────────────────────────
+// Rough CPM / CTR benchmarks per platform (used for client-side estimate only)
+const PLATFORM_FORECAST = {
+  google_ads: { cpmMin: 2,  cpmMax: 5,   ctrMin: 0.02, ctrMax: 0.05 },
+  meta:       { cpmMin: 6,  cpmMax: 12,  ctrMin: 0.01, ctrMax: 0.03 },
+  youtube:    { cpmMin: 7,  cpmMax: 15,  ctrMin: 0.005, ctrMax: 0.02 },
+  linkedin:   { cpmMin: 30, cpmMax: 60,  ctrMin: 0.005, ctrMax: 0.015 },
+  twitter:    { cpmMin: 4,  cpmMax: 8,   ctrMin: 0.01, ctrMax: 0.025 },
+  tiktok:     { cpmMin: 5,  cpmMax: 10,  ctrMin: 0.01, ctrMax: 0.03 },
+  email:      null, // list-based, no CPM
+};
+
+function computeForecast(platformId, budget) {
+  const b = parseFloat(budget) || 0;
+  const f = PLATFORM_FORECAST[platformId];
+  if (!f || b <= 0) return null;
+  const impMin   = Math.round((b / f.cpmMax) * 1000);
+  const impMax   = Math.round((b / f.cpmMin) * 1000);
+  const clickMin = Math.round(impMin * f.ctrMin);
+  const clickMax = Math.round(impMax * f.ctrMax);
+  return { impressions: [impMin, impMax], clicks: [clickMin, clickMax], cpm: [f.cpmMin, f.cpmMax] };
+}
+
+function fmtN(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000)     return (n / 1_000).toFixed(0) + "K";
+  return n.toLocaleString();
+}
+
 // ─── Distribute Tab ───────────────────────────────────────────────────────────
-function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, onSelectPlatform, onUpdateForm, onDistribute, onGenerateCreatives, onPreviewAd }) {
+function DistributeTab({ ads, profiles, generating, progressMap, distExpanded, distForms, distStatus, onSelectPlatform, onUpdateForm, onDistribute, onGenerateCreatives, onPreviewAd }) {
   const distributable = ads.filter(
-    (a) => (a.status === "approved" || a.status === "published") && a.output_files?.length > 0
+    (a) => (a.status === "ethics_cleared" || a.status === "published") && a.output_files?.length > 0
   );
 
   if (distributable.length === 0) {
@@ -829,6 +936,9 @@ function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, o
                   ? <><div className="spinner" style={{ width: 10, height: 10 }} /> Generating…</>
                   : "Regenerate"}
               </button>
+              {generating?.id === ad.id && generating?.type === "creatives" && (
+                <InlineProgress progress={progressMap?.[`${ad.id}_creatives`]} />
+              )}
             </div>
 
             {/* Creative thumbnail strip */}
@@ -866,13 +976,15 @@ function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, o
                 </p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px", marginBottom: "16px" }}>
                   {campaignPlatforms.map((name) => {
-                    const cfg = SOCIAL_PLATFORMS[name];
-                    const isSelected = distExpanded?.adId === ad.id && distExpanded?.platformId === cfg.id;
+                    const cfg           = SOCIAL_PLATFORMS[name];
+                    const isSelected    = distExpanded?.adId === ad.id && distExpanded?.platformId === cfg.id;
+                    const profileCount  = (profiles[cfg.id] || []).length;
                     return (
                       <DistributePlatformTile
                         key={name} platformName={name}
                         selected={isSelected}
                         status={distStatus[`${ad.id}_${cfg.id}`]}
+                        profileCount={profileCount}
                         onClick={() => onSelectPlatform(ad.id, cfg.id)}
                       />
                     );
@@ -889,13 +1001,15 @@ function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, o
                 </p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "8px", marginBottom: "16px" }}>
                   {otherPlatforms.map((name) => {
-                    const cfg = SOCIAL_PLATFORMS[name];
-                    const isSelected = distExpanded?.adId === ad.id && distExpanded?.platformId === cfg.id;
+                    const cfg           = SOCIAL_PLATFORMS[name];
+                    const isSelected    = distExpanded?.adId === ad.id && distExpanded?.platformId === cfg.id;
+                    const profileCount  = (profiles[cfg.id] || []).length;
                     return (
                       <DistributePlatformTile
                         key={name} platformName={name}
                         selected={isSelected}
                         status={distStatus[`${ad.id}_${cfg.id}`]}
+                        profileCount={profileCount}
                         dim
                         onClick={() => onSelectPlatform(ad.id, cfg.id)}
                       />
@@ -915,6 +1029,7 @@ function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, o
                 <DistributeForm
                   platformName={platformName}
                   platformConfig={platformConfig}
+                  profiles={profiles}
                   formData={distForms[fk] || {}}
                   status={distStatus[fk]}
                   creatives={ad.output_files}
@@ -930,7 +1045,7 @@ function DistributeTab({ ads, generating, distExpanded, distForms, distStatus, o
   );
 }
 
-function DistributePlatformTile({ platformName, selected, status, dim, onClick }) {
+function DistributePlatformTile({ platformName, selected, status, profileCount, dim, onClick }) {
   const isPosted = status?.status === "posted";
   return (
     <button
@@ -951,14 +1066,23 @@ function DistributePlatformTile({ platformName, selected, status, dim, onClick }
         {platformName}{isPosted && " ✓"}
       </span>
       {isPosted && <span style={{ fontSize: "0.68rem", color: "var(--color-accent)" }}>Posted</span>}
+      {profileCount > 0 && !isPosted && (
+        <span style={{ fontSize: "0.65rem", fontWeight: 600, color: "var(--color-accent)" }}>
+          {profileCount} profile{profileCount !== 1 ? "s" : ""}
+        </span>
+      )}
     </button>
   );
 }
 
-function DistributeForm({ platformName, platformConfig, formData, status, creatives, onChange, onPost }) {
+function DistributeForm({ platformName, platformConfig, profiles, formData, status, creatives, onChange, onPost }) {
+  const navigate          = useNavigate();
+  const platformProfiles  = profiles[platformConfig.id] || [];
+  const selectedProfileId = formData.__profileId;
   const isPosting = status?.status === "posting";
   const isPosted  = status?.status === "posted";
   const isError   = status?.status === "error";
+  const forecast  = computeForecast(platformConfig.id, formData.dist_budget);
 
   const inputStyle = {
     width: "100%", padding: "8px 12px", borderRadius: "8px", fontSize: "0.83rem",
@@ -969,91 +1093,201 @@ function DistributeForm({ platformName, platformConfig, formData, status, creati
     fontSize: "0.72rem", fontWeight: 600, color: "var(--color-sidebar-text)",
     display: "block", marginBottom: "5px",
   };
+  const sectionHeading = {
+    fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase",
+    letterSpacing: "0.07em", color: "var(--color-sidebar-text)",
+    display: "flex", alignItems: "center", gap: "5px", marginBottom: "10px",
+  };
 
   return (
     <div style={{
       padding: "20px", borderRadius: "12px",
       border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-page-bg)",
     }}>
-      <p style={{ fontSize: "0.85rem", fontWeight: 700, color: "var(--color-input-text)", marginBottom: "16px" }}>
-        Post to {platformName}
+      <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "var(--color-input-text)", marginBottom: "20px" }}>
+        Distribute via {platformName}
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: "12px", marginBottom: "16px" }}>
-        {platformConfig.fields.map((field) => (
-          <div key={field.key} style={field.type === "textarea" ? { gridColumn: "1 / -1" } : {}}>
-            <label style={labelStyle}>{field.label}</label>
-            {field.type === "textarea" ? (
-              <textarea
-                style={{ ...inputStyle, resize: "vertical", minHeight: "72px" }}
-                placeholder={field.placeholder || ""}
-                value={formData[field.key] || ""}
-                onChange={(e) => onChange(field.key, e.target.value)}
-              />
-            ) : (
-              <input
-                type={field.type}
-                style={inputStyle}
-                placeholder={field.placeholder || ""}
-                value={formData[field.key] || ""}
-                onChange={(e) => onChange(field.key, e.target.value)}
-              />
-            )}
-          </div>
-        ))}
+      {/* ── 1. Channel (account profile) ───────────────────────────────────── */}
+      <p style={sectionHeading}><Settings size={11} /> Channel</p>
+      {platformProfiles.length === 0 ? (
+        <div style={{
+          display: "flex", alignItems: "center", gap: "12px",
+          padding: "12px 16px", borderRadius: "10px", marginBottom: "20px",
+          border: "1px dashed var(--color-card-border)", backgroundColor: "var(--color-card-bg)",
+        }}>
+          <AlertCircle size={14} style={{ color: "var(--color-sidebar-text)", flexShrink: 0 }} />
+          <p style={{ fontSize: "0.82rem", color: "var(--color-sidebar-text)", flex: 1 }}>
+            No account configured for <strong>{platformName}</strong>. Add credentials in Settings.
+          </p>
+          <button onClick={() => navigate("/publisher/settings")} className="btn--inline-action--accent" style={{ whiteSpace: "nowrap" }}>
+            <Settings size={12} /> Go to Settings
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "20px" }}>
+          <select
+            value={selectedProfileId || ""}
+            onChange={(e) => onChange("__profileId", e.target.value)}
+            className="field-select"
+            style={{ flex: 1 }}
+          >
+            <option value="">— select account —</option>
+            {platformProfiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <button onClick={() => navigate("/publisher/settings")} className="btn--inline-action--ghost" style={{ whiteSpace: "nowrap" }}>
+            Manage
+          </button>
+        </div>
+      )}
 
-        {/* Schedule field — common to all platforms */}
-        <div>
-          <label style={labelStyle}>Schedule (optional)</label>
+      {/* ── 2. Budget ──────────────────────────────────────────────────────── */}
+      <p style={sectionHeading}><DollarSign size={11} /> Distribution Budget</p>
+      <div style={{ marginBottom: "20px" }}>
+        <div style={{ position: "relative" }}>
+          <span style={{
+            position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)",
+            fontSize: "0.85rem", fontWeight: 600, color: "var(--color-sidebar-text)",
+          }}>$</span>
           <input
-            type="datetime-local"
-            style={inputStyle}
-            value={formData.schedule_at || ""}
-            onChange={(e) => onChange("schedule_at", e.target.value)}
+            type="number"
+            min="0"
+            placeholder="0"
+            value={formData.dist_budget || ""}
+            onChange={(e) => onChange("dist_budget", e.target.value)}
+            style={{ ...inputStyle, paddingLeft: "24px" }}
           />
         </div>
       </div>
 
-      {/* Creative selector */}
-      <div style={{ marginBottom: "16px" }}>
-        <label style={labelStyle}>Select Creatives to Post</label>
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {creatives.map((c, i) => {
-            const sel = (formData.selected_creatives || []).includes(i);
-            return (
-              <button
-                key={i}
-                onClick={() => {
-                  const cur     = formData.selected_creatives || [];
-                  const updated = sel ? cur.filter((x) => x !== i) : [...cur, i];
-                  onChange("selected_creatives", updated);
-                }}
-                style={{
-                  width: "60px", height: "45px", borderRadius: "6px", flexShrink: 0,
-                  border: `2px solid ${sel ? "var(--color-accent)" : "var(--color-card-border)"}`,
-                  backgroundColor: "var(--color-card-bg)", overflow: "hidden",
-                  padding: 0, cursor: "pointer",
-                }}
-              >
-                {c.image_url
-                  ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <Image size={14} style={{ color: "var(--color-sidebar-text)", opacity: 0.4 }} />
-                    </div>
-                }
-              </button>
-            );
-          })}
+      {/* ── 3. Forecast ────────────────────────────────────────────────────── */}
+      {forecast && (
+        <>
+          <p style={sectionHeading}><TrendingUp size={11} /> Estimated Reach</p>
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "20px",
+          }}>
+            <ForecastStat label="Impressions" value={`${fmtN(forecast.impressions[0])} – ${fmtN(forecast.impressions[1])}`} />
+            <ForecastStat label="Clicks"      value={`${fmtN(forecast.clicks[0])} – ${fmtN(forecast.clicks[1])}`} />
+            <ForecastStat label="Est. CPM"    value={`$${forecast.cpm[0]} – $${forecast.cpm[1]}`} />
+          </div>
+        </>
+      )}
+      {PLATFORM_FORECAST[platformConfig.id] === null && (
+        <>
+          <p style={sectionHeading}><TrendingUp size={11} /> Estimated Reach</p>
+          <div style={{
+            padding: "10px 14px", borderRadius: "8px", marginBottom: "20px",
+            border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-card-bg)",
+          }}>
+            <p style={{ fontSize: "0.8rem", color: "var(--color-sidebar-text)" }}>
+              Delivery based on your recipient list size
+            </p>
+          </div>
+        </>
+      )}
+
+      {/* ── 4. Audience / Recruitment Targets ──────────────────────────────── */}
+      <p style={sectionHeading}><Users size={11} /> Audience Targets</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "12px", marginBottom: "20px" }}>
+        <div>
+          <label style={labelStyle}>Age Range</label>
+          <input
+            type="text"
+            placeholder="e.g. 25–44"
+            value={formData.target_age || ""}
+            onChange={(e) => onChange("target_age", e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Gender</label>
+          <select
+            value={formData.target_gender || ""}
+            onChange={(e) => onChange("target_gender", e.target.value)}
+            className="field-select"
+          >
+            <option value="">All genders</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="non_binary">Non-binary / Other</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Location</label>
+          <input
+            type="text"
+            placeholder="e.g. United States, UK"
+            value={formData.target_location || ""}
+            onChange={(e) => onChange("target_location", e.target.value)}
+            style={inputStyle}
+          />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={labelStyle}>Interests</label>
+          <input
+            type="text"
+            placeholder="e.g. technology, fitness, travel"
+            value={formData.target_interests || ""}
+            onChange={(e) => onChange("target_interests", e.target.value)}
+            style={inputStyle}
+          />
         </div>
       </div>
 
+      {/* ── 5. Schedule ────────────────────────────────────────────────────── */}
+      <p style={sectionHeading}><Calendar size={11} /> Schedule</p>
+      <div style={{ marginBottom: "20px" }}>
+        <input
+          type="datetime-local"
+          value={formData.schedule_at || ""}
+          onChange={(e) => onChange("schedule_at", e.target.value)}
+          style={inputStyle}
+        />
+        <p style={{ fontSize: "0.7rem", color: "var(--color-sidebar-text)", marginTop: "5px" }}>
+          Leave blank to post immediately
+        </p>
+      </div>
+
+      {/* ── 6. Creative selection ───────────────────────────────────────────── */}
+      <p style={sectionHeading}><Image size={11} /> Select Creatives</p>
+      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "20px" }}>
+        {creatives.map((c, i) => {
+          const sel = (formData.selected_creatives || []).includes(i);
+          return (
+            <button
+              key={i}
+              onClick={() => {
+                const cur     = formData.selected_creatives || [];
+                const updated = sel ? cur.filter((x) => x !== i) : [...cur, i];
+                onChange("selected_creatives", updated);
+              }}
+              style={{
+                width: "72px", height: "54px", borderRadius: "7px", flexShrink: 0,
+                border: `2px solid ${sel ? "var(--color-accent)" : "var(--color-card-border)"}`,
+                backgroundColor: "var(--color-card-bg)", overflow: "hidden",
+                padding: 0, cursor: "pointer",
+                transition: "border-color 0.12s",
+              }}
+            >
+              {c.image_url
+                ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Image size={14} style={{ color: "var(--color-sidebar-text)", opacity: 0.4 }} />
+                  </div>
+              }
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Status messages ─────────────────────────────────────────────────── */}
       {isError && (
         <div style={{ display: "flex", gap: "8px", padding: "10px 12px", borderRadius: "8px", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", marginBottom: "12px" }}>
           <AlertCircle size={14} style={{ color: "#ef4444", flexShrink: 0, marginTop: "1px" }} />
           <p style={{ fontSize: "0.8rem", color: "#ef4444" }}>{status.error}</p>
         </div>
       )}
-
       {isPosted && (
         <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 12px", borderRadius: "8px", backgroundColor: "rgba(var(--color-accent-r),var(--color-accent-g),var(--color-accent-b),0.08)", border: "1px solid rgba(var(--color-accent-r),var(--color-accent-g),var(--color-accent-b),0.3)", marginBottom: "12px" }}>
           <CheckCircle2 size={14} style={{ color: "var(--color-accent)", flexShrink: 0 }} />
@@ -1067,19 +1301,30 @@ function DistributeForm({ platformName, platformConfig, formData, status, creati
 
       <button
         onClick={onPost}
-        disabled={isPosting}
+        disabled={isPosting || !selectedProfileId}
         className="btn--accent"
-        style={{ display: "inline-flex", alignItems: "center", gap: "8px", opacity: isPosting ? 0.7 : 1 }}
+        style={{ display: "inline-flex", alignItems: "center", gap: "8px", opacity: (isPosting || !selectedProfileId) ? 0.55 : 1 }}
       >
-        {isPosting
-          ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />
-          : <Share2 size={14} />}
-        {isPosting
-          ? "Posting…"
-          : formData.schedule_at
-            ? "Schedule Post"
-            : isPosted ? "Repost" : `Post to ${platformName}`}
+        {isPosting ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Share2 size={14} />}
+        {isPosting ? "Posting…" : formData.schedule_at ? "Schedule Post" : isPosted ? "Repost" : `Post to ${platformName}`}
       </button>
+    </div>
+  );
+}
+
+function ForecastStat({ label, value }) {
+  return (
+    <div style={{
+      padding: "10px 14px", borderRadius: "8px",
+      border: "1px solid var(--color-card-border)",
+      backgroundColor: "var(--color-card-bg)",
+    }}>
+      <p style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-sidebar-text)", marginBottom: "5px" }}>
+        {label}
+      </p>
+      <p style={{ fontSize: "0.92rem", fontWeight: 700, color: "var(--color-input-text)" }}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -1134,31 +1379,88 @@ function aspectRatioForFormat(format = "") {
 }
 
 // ─── Publisher Analytics Sub-component ───────────────────────────────────────
-function PublisherAnalytics({ ads }) {
+const PRIORITY_COLOR = { high: "#ef4444", medium: "#f97316", low: "#6b7280" };
+
+function PublisherAnalytics({ ads, onAdUpdated }) {
   const [selected,    setSelected]    = useState(null);
   const [suggestions, setSuggestions] = useState(null);
+  const [checked,     setChecked]     = useState({});   // key → bool
+  const [regenNotes,  setRegenNotes]  = useState("");
   const [optimizing,  setOptimizing]  = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenDone,   setRegenDone]   = useState(null); // adId after success
+  const optProgress   = useGenerateProgress();
+  const regenProgress = useGenerateProgress();
 
-  const handleOptimize = async (adId) => {
+  const handleOptimize = async (ad) => {
+    setSelected(ad);
+    setSuggestions(null);
+    setChecked({});
+    setRegenDone(null);
     setOptimizing(true);
+    optProgress.start(12000);
     try {
-      const result = await analyticsAPI.triggerOptimize(adId);
+      const result = await analyticsAPI.triggerOptimize(ad.id);
+      optProgress.complete();
       setSuggestions(result);
-    } catch (err) { alert(err.message); }
+      // Pre-check all high-priority actions by default
+      const defaults = {};
+      (result?.suggestions?.priority_actions || []).forEach((a, i) => {
+        if (a.priority === "high") defaults[`action_${i}`] = true;
+      });
+      setChecked(defaults);
+    } catch (err) { optProgress.fail(); alert(err.message); }
     finally { setOptimizing(false); }
   };
 
-  const handleDecision = async (adId, decision) => {
+  const toggleCheck = (key) => setChecked((p) => ({ ...p, [key]: !p[key] }));
+
+  const selectedSuggestions = () => {
+    if (!suggestions) return [];
+    const s = suggestions.suggestions || {};
+    const result = [];
+    (s.priority_actions || []).forEach((a, i) => {
+      if (checked[`action_${i}`]) result.push({ type: "priority_action", ...a });
+    });
+    (s.content_changes || []).forEach((c, i) => {
+      if (checked[`content_${i}`]) result.push({ type: "content_change", change: c });
+    });
+    return result;
+  };
+
+  const handleRegenerate = async () => {
+    const sel = selectedSuggestions();
+    if (!sel.length) return;
+    setRegenerating(true);
+    regenProgress.start(50000);
     try {
-      await analyticsAPI.submitDecision(adId, { decision });
+      const updated = await adsAPI.publisherRegenerate(selected.id, {
+        selected_suggestions: sel,
+        notes: regenNotes || null,
+      });
+      // Also record the decision for reinforcement learning
+      await analyticsAPI.submitDecision(selected.id, { decision: "partial", applied_changes: sel });
+      regenProgress.complete();
+      setRegenDone(selected.id);
+      onAdUpdated(updated);
       setSuggestions(null);
-      alert(`Decision "${decision}" recorded. Reinforcement learning updated.`);
+    } catch (err) { regenProgress.fail(); alert(err.message); }
+    finally { setRegenerating(false); }
+  };
+
+  const handleReject = async (adId) => {
+    try {
+      await analyticsAPI.submitDecision(adId, { decision: "rejected" });
+      setSuggestions(null);
+      setSelected(null);
     } catch (err) { alert(err.message); }
   };
 
+  const nSelected = selectedSuggestions().length;
+
   return (
     <div className="space-y-4">
-      <SectionCard title="Published Campaign Analytics" subtitle="View performance and apply optimizer suggestions">
+      <SectionCard title="Published Campaign Analytics" subtitle="Run optimizer to get AI-powered improvement suggestions">
         {ads.length === 0 ? (
           <p className="text-sm py-4" style={{ color: "var(--color-sidebar-text)" }}>No published campaigns to analyze yet</p>
         ) : (
@@ -1171,33 +1473,170 @@ function PublisherAnalytics({ ads }) {
                   <p className="table-row__meta">{typeLabel(ad)}</p>
                 </div>
               </div>
-              <button
-                onClick={() => { setSelected(ad); handleOptimize(ad.id); }}
-                className="btn--optimize"
-              >
-                <Sparkles size={12} /> {optimizing && selected?.id === ad.id ? "Optimizing…" : "Optimize"}
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {regenDone === ad.id && (
+                  <span style={{ fontSize: "0.75rem", color: "var(--color-accent)", fontWeight: 600 }}>
+                    ✓ Sent to ethics review
+                  </span>
+                )}
+                <button
+                  onClick={() => handleOptimize(ad)}
+                  disabled={optimizing}
+                  className="btn--optimize"
+                >
+                  <Sparkles size={12} /> {optimizing && selected?.id === ad.id ? "Analyzing…" : "Run Optimizer"}
+                </button>
+                {optimizing && selected?.id === ad.id && <InlineProgress progress={optProgress.progress} />}
+              </div>
             </div>
           ))
         )}
       </SectionCard>
 
       {suggestions && selected && (
-        <SectionCard title={`Optimizer Suggestions: ${selected.title}`}>
-          <div className="code-preview--highlight mb-4">
-            <pre>{JSON.stringify(suggestions.suggestions, null, 2)}</pre>
+        <SectionCard title={`Optimizer — ${selected.title}`} subtitle="Select suggestions to apply, then request regeneration">
+
+          {/* Overall assessment */}
+          {suggestions.suggestions?.overall_assessment && (
+            <div style={{
+              padding: "12px 16px", borderRadius: "10px", marginBottom: "20px",
+              backgroundColor: "var(--color-page-bg)", border: "1px solid var(--color-card-border)",
+            }}>
+              <p style={{ fontSize: "0.82rem", color: "var(--color-input-text)", lineHeight: 1.5 }}>
+                {suggestions.suggestions.overall_assessment}
+              </p>
+            </div>
+          )}
+
+          {/* Priority actions */}
+          {suggestions.suggestions?.priority_actions?.length > 0 && (
+            <div style={{ marginBottom: "20px" }}>
+              <p style={{ fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-sidebar-text)", marginBottom: "10px" }}>
+                Priority Actions
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {suggestions.suggestions.priority_actions.map((action, i) => (
+                  <label key={i} style={{
+                    display: "flex", alignItems: "flex-start", gap: "10px",
+                    padding: "12px 14px", borderRadius: "10px", cursor: "pointer",
+                    border: `1px solid ${checked[`action_${i}`] ? "var(--color-accent)" : "var(--color-card-border)"}`,
+                    backgroundColor: checked[`action_${i}`]
+                      ? "rgba(var(--color-accent-r),var(--color-accent-g),var(--color-accent-b),0.04)"
+                      : "var(--color-card-bg)",
+                    transition: "border-color 0.15s, background-color 0.15s",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={!!checked[`action_${i}`]}
+                      onChange={() => toggleCheck(`action_${i}`)}
+                      style={{ marginTop: "2px", flexShrink: 0, accentColor: "var(--color-accent)" }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--color-input-text)" }}>
+                          {action.action}
+                        </span>
+                        <span style={{
+                          fontSize: "0.62rem", fontWeight: 700, textTransform: "uppercase",
+                          padding: "2px 7px", borderRadius: "20px", letterSpacing: "0.04em",
+                          color: "#fff", backgroundColor: PRIORITY_COLOR[action.priority] || PRIORITY_COLOR.low,
+                        }}>
+                          {action.priority}
+                        </span>
+                      </div>
+                      {action.expected_impact && (
+                        <p style={{ fontSize: "0.75rem", color: "var(--color-sidebar-text)", marginBottom: "3px" }}>
+                          Impact: {action.expected_impact}
+                        </p>
+                      )}
+                      {action.implementation && (
+                        <p style={{ fontSize: "0.73rem", color: "var(--color-sidebar-text)", fontStyle: "italic" }}>
+                          How: {action.implementation}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Content changes */}
+          {suggestions.suggestions?.content_changes?.length > 0 && (
+            <div style={{ marginBottom: "20px" }}>
+              <p style={{ fontSize: "0.68rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-sidebar-text)", marginBottom: "10px" }}>
+                Content Changes
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {suggestions.suggestions.content_changes.map((change, i) => (
+                  <label key={i} style={{
+                    display: "flex", alignItems: "center", gap: "10px",
+                    padding: "10px 14px", borderRadius: "8px", cursor: "pointer",
+                    border: `1px solid ${checked[`content_${i}`] ? "var(--color-accent)" : "var(--color-card-border)"}`,
+                    backgroundColor: checked[`content_${i}`]
+                      ? "rgba(var(--color-accent-r),var(--color-accent-g),var(--color-accent-b),0.04)"
+                      : "var(--color-card-bg)",
+                    transition: "border-color 0.15s, background-color 0.15s",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={!!checked[`content_${i}`]}
+                      onChange={() => toggleCheck(`content_${i}`)}
+                      style={{ flexShrink: 0, accentColor: "var(--color-accent)" }}
+                    />
+                    <span style={{ fontSize: "0.82rem", color: "var(--color-input-text)" }}>{change}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--color-sidebar-text)", display: "block", marginBottom: "5px" }}>
+              Additional notes for regeneration (optional)
+            </label>
+            <textarea
+              value={regenNotes}
+              onChange={(e) => setRegenNotes(e.target.value)}
+              rows={2}
+              placeholder="Any extra context or direction for the AI…"
+              style={{
+                width: "100%", padding: "8px 12px", borderRadius: "8px", fontSize: "0.83rem",
+                border: "1px solid var(--color-card-border)", backgroundColor: "var(--color-input-bg)",
+                color: "var(--color-input-text)", resize: "vertical", fontFamily: "inherit",
+              }}
+            />
           </div>
-          <div className="flex gap-3">
-            <button onClick={() => handleDecision(selected.id, "accepted")} className="btn--approve">
-              <CheckCircle size={16} /> Accept & Redeploy
+
+          {/* Actions */}
+          <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              onClick={handleRegenerate}
+              disabled={nSelected === 0 || regenerating}
+              className="btn--approve"
+              style={{ opacity: nSelected === 0 ? 0.5 : 1 }}
+            >
+              {regenerating
+                ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Regenerating…</>
+                : <><RotateCcw size={14} /> Regenerate with {nSelected} change{nSelected !== 1 ? "s" : ""}</>}
             </button>
-            <button onClick={() => handleDecision(selected.id, "partial")} className="btn--revise">
-              Partial Accept
-            </button>
-            <button onClick={() => handleDecision(selected.id, "rejected")} className="btn--ghost flex-1 py-2.5">
-              Reject
+            {regenerating && <InlineProgress progress={regenProgress.progress} />}
+            <button
+              onClick={() => handleReject(selected.id)}
+              disabled={regenerating}
+              className="btn--ghost"
+              style={{ marginLeft: "auto" }}
+            >
+              Dismiss
             </button>
           </div>
+
+          {nSelected === 0 && (
+            <p style={{ fontSize: "0.75rem", color: "var(--color-sidebar-text)", marginTop: "8px" }}>
+              Select at least one suggestion to enable regeneration.
+            </p>
+          )}
         </SectionCard>
       )}
     </div>

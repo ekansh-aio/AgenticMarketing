@@ -36,7 +36,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import {
   LayoutDashboard, Users, FileText, BarChart3,
   LogOut, Shield, Eye, Megaphone, Globe, Bot,
-  Rocket, Share2,
+  Rocket, Share2, Settings,
 } from "lucide-react";
 
 // ─── RoleGuardedRoute ─────────────────────────────────────────────────────────
@@ -81,15 +81,16 @@ const SIDEBAR_LINKS_BY_ROLE = {
     { label: "Analytics", icon: BarChart3,       path: "/reviewer/analytics" },
   ],
   ethics_reviewer: [
-    { label: "Dashboard",     icon: LayoutDashboard, path: "/ethics" },
-    { label: "Ethics Review", icon: Shield,          path: "/ethics/review" },
-    { label: "Documents",     icon: FileText,        path: "/ethics/documents" },
+    { label: "Dashboard",  icon: LayoutDashboard, path: "/ethics" },
+    { label: "Review",     icon: Shield,          path: "/ethics/review" },
+    { label: "Guidelines", icon: FileText,        path: "/ethics/documents" },
   ],
   publisher: [
     { label: "Dashboard",   icon: LayoutDashboard, path: "/publisher" },
     { label: "Deploy",      icon: Rocket,          path: "/publisher/deploy" },
     { label: "Distribute",  icon: Share2,          path: "/publisher/distribute" },
     { label: "Analytics",   icon: BarChart3,       path: "/publisher/analytics" },
+    { label: "Settings",    icon: Settings,        path: "/publisher/settings" },
   ],
 };
 
@@ -215,6 +216,7 @@ const STATUS_TO_CSS_MODIFIER = {
   under_review:     "status-badge--review",
   ethics_review:    "status-badge--review",
   approved:         "status-badge--approved",
+  ethics_cleared:   "status-badge--approved",
   published:        "status-badge--published",
   paused:           "status-badge--paused",
   optimizing:       "status-badge--draft",

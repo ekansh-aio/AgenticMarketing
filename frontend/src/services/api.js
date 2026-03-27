@@ -301,6 +301,27 @@ export const adsAPI = {
       body: JSON.stringify(data),
     }),
 
+  // Ethics reviewer: regenerate content with ethical notes
+  regenerateWithEthics: (adId, data) =>
+    request(`/advertisements/${adId}/ethics-regenerate`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // Ethics reviewer: clear campaign for publishing
+  ethicsClear: (adId, notes) =>
+    request(`/advertisements/${adId}/ethics-clear`, {
+      method: "POST",
+      body: JSON.stringify({ notes }),
+    }),
+
+  // Publisher: request AI regeneration based on optimizer suggestions; sends back to ethics review
+  publisherRegenerate: (adId, data) =>
+    request(`/advertisements/${adId}/publisher-regenerate`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   generateQuestionnaire: (adId) =>
     request(`/advertisements/${adId}/generate-questionnaire`, { method: "POST" }),
 

@@ -33,6 +33,7 @@ class AdStatusEnum(str, Enum):
     under_review = "under_review"
     ethics_review = "ethics_review"
     approved = "approved"
+    ethics_cleared = "ethics_cleared"
     published = "published"
     paused = "paused"
     optimizing = "optimizing"
@@ -335,3 +336,22 @@ class MinorEditRequest(BaseModel):
 
 class RewriteStrategyRequest(BaseModel):
     instructions: str
+
+
+# ─── Ethics Reviewer Action Schemas ──────────────────────────────────────────
+
+class EthicsIssue(BaseModel):
+    type: str
+    description: str
+    suggestion: Optional[str] = None
+
+class EthicsRegenerateRequest(BaseModel):
+    issues: List[EthicsIssue]
+    notes: Optional[str] = None
+
+class EthicsClearRequest(BaseModel):
+    notes: Optional[str] = None
+
+class PublisherRegenerateRequest(BaseModel):
+    selected_suggestions: List[Dict[str, Any]]   # items from priority_actions / content_changes
+    notes: Optional[str] = None

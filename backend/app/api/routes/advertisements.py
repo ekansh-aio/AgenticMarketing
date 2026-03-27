@@ -29,7 +29,8 @@ from app.schemas.schemas import (
     AdvertisementCreate, AdvertisementOut, AdvertisementUpdate,
     ReviewCreate, ReviewOut, OptimizerDecision, BotConfigUpdate,
     AdvertisementDocumentOut, MinorEditRequest, RewriteStrategyRequest,
-    QuestionnaireUpdate,
+    QuestionnaireUpdate, EthicsRegenerateRequest, EthicsClearRequest,
+    PublisherRegenerateRequest,
 )
 from app.core.security import require_roles, get_current_user
 from app.services.ai.curator import CuratorService
@@ -414,7 +415,7 @@ async def publish_advertisement(
 @router.post("/{ad_id}/generate-creatives", response_model=AdvertisementOut)
 async def generate_creatives(
     ad_id: str,
-    user: User = Depends(require_roles([UserRole.ADMIN, UserRole.PUBLISHER])),
+    user: User = Depends(require_roles([UserRole.ADMIN, UserRole.PUBLISHER, UserRole.ETHICS_REVIEWER])),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -424,7 +425,7 @@ async def generate_creatives(
     - Images saved to outputs/<company_id>/<ad_id>/ and served via /outputs/.
     - Output stored in ad.output_files as a list of creative dicts.
 
-    Available for approved and published campaigns.
+    Available for approved, ethics_review, ethics_cleared, and published campaigns.
     """
     result = await db.execute(
         select(Advertisement).where(
@@ -435,7 +436,7 @@ async def generate_creatives(
     ad = result.scalar_one_or_none()
     if not ad:
         raise HTTPException(status_code=404, detail="Advertisement not found")
-    if ad.status not in (AdStatus.APPROVED, AdStatus.PUBLISHED):
+    if ad.status not in (AdStatus.APPROVED, AdStatus.ETHICS_REVIEW, AdStatus.ETHICS_CLEARED, AdStatus.PUBLISHED):
         raise HTTPException(
             status_code=400,
             detail="Creatives can only be generated for approved or published campaigns.",
@@ -553,14 +554,14 @@ async def serve_website(
 @router.post("/{ad_id}/generate-website", response_model=AdvertisementOut)
 async def generate_website(
     ad_id: str,
-    user: User = Depends(require_roles([UserRole.ADMIN, UserRole.PUBLISHER])),
+    user: User = Depends(require_roles([UserRole.ADMIN, UserRole.PUBLISHER, UserRole.ETHICS_REVIEWER])),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Generate a static HTML landing page from the campaign's marketing strategy,
     reviewer website requirements, and company brand kit.
 
-    Available once the campaign is approved or published.
+    Available once the campaign is approved, in ethics review, or published.
     Saved to outputs/<company_id>/<ad_id>/website/index.html.
     URL stored in ad.output_url.
     """
@@ -573,7 +574,7 @@ async def generate_website(
     ad = result.scalar_one_or_none()
     if not ad:
         raise HTTPException(status_code=404, detail="Advertisement not found")
-    if ad.status not in (AdStatus.APPROVED, AdStatus.PUBLISHED):
+    if ad.status not in (AdStatus.APPROVED, AdStatus.ETHICS_REVIEW, AdStatus.ETHICS_CLEARED, AdStatus.PUBLISHED):
         raise HTTPException(
             status_code=400,
             detail="Website can only be generated for approved or published campaigns.",
@@ -749,4 +750,184 @@ async def update_bot_config(
         raise HTTPException(status_code=404, detail="Advertisement not found")
 
     ad.bot_config = body.model_dump(exclude_unset=True)
+    return ad
+
+
+# ─── Ethics Reviewer Actions ──────────────────────────────────────────────────
+
+@router.post("/{ad_id}/ethics-regenerate", response_model=AdvertisementOut)
+async def ethics_regenerate(
+    ad_id: str,
+    body: EthicsRegenerateRequest,
+    user: User = Depends(require_roles([UserRole.ETHICS_REVIEWER])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ethics reviewer flags issues and requests AI regeneration of creatives/website.
+    Sets status to ethics_review so the queue reflects active ethics work.
+    """
+    result = await db.execute(
+        select(Advertisement).where(
+            Advertisement.id == ad_id,
+            Advertisement.company_id == user.company_id,
+        )
+    )
+    ad = result.scalar_one_or_none()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    if ad.status not in (AdStatus.APPROVED, AdStatus.ETHICS_REVIEW):
+        raise HTTPException(
+            status_code=400,
+            detail="Ethics regeneration is only available for approved or ethics_review campaigns.",
+        )
+
+    # Regenerate creatives (ethics issues are logged in the audit review below)
+    from app.services.ai.creative import CreativeService
+    svc = CreativeService(company_id=user.company_id)
+    try:
+        creatives = await svc.generate_creatives(ad)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    ad.output_files = creatives
+    ad.status = AdStatus.ETHICS_REVIEW
+
+    audit = Review(
+        advertisement_id=ad_id,
+        reviewer_id=user.id,
+        review_type="ethics",
+        status="pending",
+        comments=f"Ethics regeneration requested with {len(body.issues)} issue(s). Notes: {body.notes or '—'}",
+    )
+    db.add(audit)
+    await db.flush()
+    return ad
+
+
+@router.post("/{ad_id}/ethics-clear", response_model=AdvertisementOut)
+async def ethics_clear(
+    ad_id: str,
+    body: EthicsClearRequest,
+    user: User = Depends(require_roles([UserRole.ETHICS_REVIEWER])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ethics reviewer clears a campaign for publishing.
+    Sets status to ethics_cleared — publishers can then pick it up.
+    """
+    result = await db.execute(
+        select(Advertisement).where(
+            Advertisement.id == ad_id,
+            Advertisement.company_id == user.company_id,
+        )
+    )
+    ad = result.scalar_one_or_none()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    if ad.status not in (AdStatus.APPROVED, AdStatus.ETHICS_REVIEW):
+        raise HTTPException(
+            status_code=400,
+            detail="Only approved or ethics_review campaigns can be cleared for publishing.",
+        )
+
+    # Enforce that all required content has been generated before clearing.
+    ad_types = ad.ad_type if isinstance(ad.ad_type, list) else [ad.ad_type]
+    missing = []
+    if "website" in ad_types and not ad.output_url:
+        missing.append("website")
+    if "ads" in ad_types and not ad.output_files:
+        missing.append("ad creatives")
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot clear for publishing — the following content has not been generated yet: {', '.join(missing)}. Generate it first.",
+        )
+
+    ad.status = AdStatus.ETHICS_CLEARED
+
+    audit = Review(
+        advertisement_id=ad_id,
+        reviewer_id=user.id,
+        review_type="ethics",
+        status="approved",
+        comments=f"Cleared for publishing by ethics reviewer. Notes: {body.notes or '—'}",
+    )
+    db.add(audit)
+    await db.flush()
+    return ad
+
+
+@router.post("/{ad_id}/publisher-regenerate", response_model=AdvertisementOut)
+async def publisher_regenerate(
+    ad_id: str,
+    body: PublisherRegenerateRequest,
+    user: User = Depends(require_roles([UserRole.PUBLISHER])),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Publisher selects optimizer suggestions and requests AI regeneration.
+    - Regenerates creatives (and website if applicable).
+    - Sets status back to ethics_review so the ethics reviewer re-checks the new content.
+    - Logs the selected suggestions in an audit record for the ethics reviewer.
+    """
+    result = await db.execute(
+        select(Advertisement).where(
+            Advertisement.id == ad_id,
+            Advertisement.company_id == user.company_id,
+        )
+    )
+    ad = result.scalar_one_or_none()
+    if not ad:
+        raise HTTPException(status_code=404, detail="Advertisement not found")
+    if ad.status != AdStatus.PUBLISHED:
+        raise HTTPException(
+            status_code=400,
+            detail="Publisher regeneration is only available for published campaigns.",
+        )
+
+    ad_types = ad.ad_type if isinstance(ad.ad_type, list) else [ad.ad_type]
+
+    if "ads" in ad_types:
+        from app.services.ai.creative import CreativeService
+        svc = CreativeService(company_id=user.company_id)
+        try:
+            creatives = await svc.generate_creatives(ad)
+            ad.output_files = creatives
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Creative regeneration failed: {exc}")
+
+    if "website" in ad_types:
+        brand_kit_result = await db.execute(
+            select(BrandKit).where(BrandKit.company_id == user.company_id)
+        )
+        brand_kit = brand_kit_result.scalar_one_or_none()
+        company_result = await db.execute(
+            select(Company).where(Company.id == user.company_id)
+        )
+        company = company_result.scalar_one_or_none()
+        from app.services.ai.website_agent import WebsiteAgentService
+        wsvc = WebsiteAgentService(company_id=user.company_id)
+        try:
+            await wsvc.generate_website(ad, brand_kit, company)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Website regeneration failed: {exc}")
+
+    ad.status = AdStatus.ETHICS_REVIEW
+
+    suggestion_summary = "; ".join(
+        s.get("action") or s.get("change") or str(s)
+        for s in body.selected_suggestions[:5]
+    )
+    audit = Review(
+        advertisement_id=ad_id,
+        reviewer_id=user.id,
+        review_type="system",
+        status="pending",
+        comments=(
+            f"Publisher-requested regeneration with {len(body.selected_suggestions)} optimizer suggestion(s). "
+            f"Selected: {suggestion_summary}. Notes: {body.notes or '—'}"
+        ),
+    )
+    db.add(audit)
+    await db.flush()
     return ad

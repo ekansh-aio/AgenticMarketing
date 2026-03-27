@@ -46,6 +46,7 @@ class AdStatus(str, enum.Enum):
     UNDER_REVIEW = "under_review"
     ETHICS_REVIEW = "ethics_review"
     APPROVED = "approved"
+    ETHICS_CLEARED = "ethics_cleared"
     PUBLISHED = "published"
     PAUSED = "paused"
     OPTIMIZING = "optimizing"

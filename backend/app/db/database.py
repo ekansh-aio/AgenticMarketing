@@ -45,6 +45,19 @@ async def init_db():
     """
     import app.models.models  # noqa: F401 — registers all ORM classes on Base.metadata
 
+    _sql = __import__("sqlalchemy").text
+
+    # ── Enum migrations must commit in their OWN transaction before any code
+    # tries to use the new values.  ALTER TYPE … ADD VALUE is not visible to
+    # other statements inside the same transaction in PostgreSQL.
+    # NOTE: SQLAlchemy stores enum members using their .name (uppercase), so
+    # the PostgreSQL enum values must be uppercase to match (e.g. 'ETHICS_CLEARED').
+    async with engine.connect() as conn:
+        await conn.execute(_sql(
+            "ALTER TYPE adstatus ADD VALUE IF NOT EXISTS 'ETHICS_CLEARED';"
+        ))
+        await conn.commit()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Add content column to advertisement_documents if it was created before
@@ -57,7 +70,6 @@ async def init_db():
         )
         # Add campaign_category and questionnaire columns to advertisements
         # (added for recruitment/survey/hiring/clinical-trial questionnaire feature).
-        _sql = __import__("sqlalchemy").text
         await conn.execute(_sql(
             "ALTER TABLE advertisements "
             "ADD COLUMN IF NOT EXISTS campaign_category VARCHAR(64);"
