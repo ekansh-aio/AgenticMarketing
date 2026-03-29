@@ -106,6 +106,34 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
+# ─── Profile Schemas ──────────────────────────────────────────────────────────
+
+class UserRoleUpdate(BaseModel):
+    role: UserRoleEnum
+
+
+# ─── Profile Schemas ──────────────────────────────────────────────────────────
+
+class ProfileOut(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    role: UserRoleEnum
+    is_active: bool
+    created_at: datetime
+    company_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class ProfileUpdate(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=128)
+
+class PasswordChange(BaseModel):
+    otp: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8)
+
+
 # ─── Company Document Schemas ─────────────────────────────────────────────────
 # Global company-level documents. Shown in My Company page.
 

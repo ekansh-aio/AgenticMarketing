@@ -36,7 +36,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import {
   LayoutDashboard, Users, FileText, BarChart3,
   LogOut, Shield, Eye, Megaphone, Globe, Bot,
-  Rocket, Share2, Settings,
+  Rocket, Share2, Settings, UserCircle,
 } from "lucide-react";
 
 // ─── RoleGuardedRoute ─────────────────────────────────────────────────────────
@@ -75,15 +75,18 @@ const SIDEBAR_LINKS_BY_ROLE = {
     { label: "User Management", icon: Users,            path: "/admin/users" },
     { label: "My Company",      icon: FileText,         path: "/admin/company" },
     { label: "Analytics",       icon: BarChart3,        path: "/admin/analytics" },
+    { label: "My Profile",      icon: UserCircle,       path: "/profile" },
   ],
   reviewer: [
-    { label: "Dashboard", icon: LayoutDashboard, path: "/reviewer" },
-    { label: "Analytics", icon: BarChart3,       path: "/reviewer/analytics" },
+    { label: "Dashboard",  icon: LayoutDashboard, path: "/reviewer" },
+    { label: "Analytics",  icon: BarChart3,       path: "/reviewer/analytics" },
+    { label: "My Profile", icon: UserCircle,      path: "/profile" },
   ],
   ethics_reviewer: [
     { label: "Dashboard",  icon: LayoutDashboard, path: "/ethics" },
     { label: "Review",     icon: Shield,          path: "/ethics/review" },
     { label: "Guidelines", icon: FileText,        path: "/ethics/documents" },
+    { label: "My Profile", icon: UserCircle,      path: "/profile" },
   ],
   publisher: [
     { label: "Dashboard",   icon: LayoutDashboard, path: "/publisher" },
@@ -91,6 +94,7 @@ const SIDEBAR_LINKS_BY_ROLE = {
     { label: "Distribute",  icon: Share2,          path: "/publisher/distribute" },
     { label: "Analytics",   icon: BarChart3,       path: "/publisher/analytics" },
     { label: "Settings",    icon: Settings,        path: "/publisher/settings" },
+    { label: "My Profile",  icon: UserCircle,      path: "/profile" },
   ],
 };
 

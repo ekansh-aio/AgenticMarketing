@@ -661,25 +661,31 @@ function QuantKpiChart({ kpis, editable = false, onUpdate }) {
   const BAR_MAX = 88, BAR_MIN = 28;
 
   return (
-    <div>
-      {/* Bars */}
-      <div style={{
-        display: "flex", alignItems: "flex-end", gap: 10,
-        paddingBottom: 0, borderBottom: "2px solid var(--color-card-border)",
-      }}>
+    <div style={{ overflowX: "auto" }}>
+      {/* Target values row — separate from bars to avoid upward overflow clipping */}
+      <div style={{ display: "flex", gap: 10, paddingBottom: 4 }}>
         {normalized.map((k, i) => {
           const cat   = detectKpiCategory(k.metric);
           const color = cat?.color ?? DONUT_PALETTE[i % DONUT_PALETTE.length];
-          const barH  = nums[i] === 0 ? BAR_MIN : BAR_MIN + ((nums[i] / maxVal) * (BAR_MAX - BAR_MIN));
           return (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              {/* Target value above bar */}
+            <div key={i} style={{ flex: 1, minWidth: 60, textAlign: "center" }}>
               {editable
                 ? <InlineField value={k.target ?? ""} onChange={(v) => onUpdate(i, "target", v)} multiline={false}
                     extraStyle={{ fontSize: "0.72rem", fontWeight: 700, color, textAlign: "center", maxWidth: "100%" }} placeholder="Target…" />
                 : <span style={{ fontSize: "0.72rem", fontWeight: 800, color, letterSpacing: "0.02em" }}>{k.target}</span>
               }
-              {/* Bar */}
+            </div>
+          );
+        })}
+      </div>
+      {/* Bars row */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10, borderBottom: "2px solid var(--color-card-border)" }}>
+        {normalized.map((k, i) => {
+          const cat   = detectKpiCategory(k.metric);
+          const color = cat?.color ?? DONUT_PALETTE[i % DONUT_PALETTE.length];
+          const barH  = nums[i] === 0 ? BAR_MIN : BAR_MIN + ((nums[i] / maxVal) * (BAR_MAX - BAR_MIN));
+          return (
+            <div key={i} style={{ flex: 1, minWidth: 60 }}>
               <div style={{
                 width: "100%", height: barH, borderRadius: "5px 5px 0 0",
                 background: `linear-gradient(180deg, ${color}dd 0%, ${color}55 100%)`,
@@ -695,7 +701,7 @@ function QuantKpiChart({ kpis, editable = false, onUpdate }) {
           const cat   = detectKpiCategory(k.metric);
           const color = cat?.color ?? DONUT_PALETTE[i % DONUT_PALETTE.length];
           return (
-            <div key={i} style={{ flex: 1, textAlign: "center" }}>
+            <div key={i} style={{ flex: 1, minWidth: 60, textAlign: "center" }}>
               {editable
                 ? <InlineField value={k.metric ?? ""} onChange={(v) => onUpdate(i, "metric", v)} multiline={false}
                     extraStyle={{ fontSize: "0.72rem", fontWeight: 700, color, textAlign: "center" }} placeholder="Metric…" />

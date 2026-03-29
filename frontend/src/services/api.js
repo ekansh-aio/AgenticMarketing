@@ -122,6 +122,27 @@ export const brandKitAPI = {
     }),
 };
 
+// ─── Profile (self-service, all roles) ───────────────────────────────────────
+
+export const profileAPI = {
+  getMe: () => request("/profile/me"),
+
+  updateMe: (data) =>
+    request("/profile/me", {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
+  requestOtp: () =>
+    request("/profile/me/request-otp", { method: "POST" }),
+
+  changePassword: (otp, new_password) =>
+    request("/profile/me/change-password", {
+      method: "POST",
+      body: JSON.stringify({ otp, new_password }),
+    }),
+};
+
 // ─── M2: Users ───────────────────────────────────────────────────────────────
 
 export const usersAPI = {
@@ -135,6 +156,15 @@ export const usersAPI = {
 
   deactivate: (userId) =>
     request(`/users/${userId}/deactivate`, { method: "PATCH" }),
+
+  changeRole: (userId, role) =>
+    request(`/users/${userId}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
+
+  delete: (userId) =>
+    request(`/users/${userId}`, { method: "DELETE" }),
 };
 
 // ─── M3: Documents ───────────────────────────────────────────────────────────

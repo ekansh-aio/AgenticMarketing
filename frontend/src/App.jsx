@@ -34,6 +34,9 @@ import PublisherSettings  from "./components/publisher/PublisherSettings";
 // Analytics (shared)
 import AnalyticsPage from "./components/analytics/AnalyticsPage";
 
+// Profile (shared — all roles)
+import MyProfile from "./components/shared/MyProfile";
+
 const ALL_ROLES = ["admin", "reviewer", "ethics_reviewer", "publisher"];
 
 function AppRoutes() {
@@ -72,6 +75,9 @@ function AppRoutes() {
       <Route path="/publisher/distribute" element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherDashboard /></ProtectedRoute>} />
       <Route path="/publisher/analytics" element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherDashboard /></ProtectedRoute>} />
       <Route path="/publisher/settings"  element={<ProtectedRoute allowedRoles={["publisher"]}><PublisherSettings /></ProtectedRoute>} />
+
+      {/* My Profile — all authenticated roles */}
+      <Route path="/profile" element={<ProtectedRoute allowedRoles={ALL_ROLES}><MyProfile /></ProtectedRoute>} />
 
       {/* Unauthorized */}
       <Route path="/unauthorized" element={

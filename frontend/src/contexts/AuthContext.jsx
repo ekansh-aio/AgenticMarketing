@@ -87,12 +87,24 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, []);
 
+  // Patch specific fields on the stored user without a full re-login.
+  // Used by MyProfile to refresh the displayed name after an update.
+  const updateUser = useCallback((patch) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      localStorage.setItem("user", JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   const value = {
     user,
     loading,
     login,
     logout,
     hydrateUser,
+    updateUser,
     isAuthenticated: !!user,
     role: user?.role,
     companyId: user?.companyId,

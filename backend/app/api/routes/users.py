@@ -14,7 +14,7 @@ from typing import List
 
 from app.db.database import get_db
 from app.models.models import User, UserRole
-from app.schemas.schemas import UserCreate, UserOut
+from app.schemas.schemas import UserCreate, UserOut, UserRoleUpdate
 from app.core.security import hash_password, require_roles
 
 router = APIRouter(prefix="/users", tags=["User Management"])
@@ -70,3 +70,43 @@ async def deactivate_user(
         raise HTTPException(status_code=404, detail="User not found")
     user.is_active = False
     return user
+
+
+@router.patch("/{user_id}/role", response_model=UserOut)
+async def change_user_role(
+    user_id: str,
+    body: UserRoleUpdate,
+    admin: User = Depends(require_roles([UserRole.ADMIN])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change a user's role. Admin cannot change their own role."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot change your own role.")
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.company_id == admin.company_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = body.role
+    await db.flush()
+    return user
+
+
+@router.delete("/{user_id}", status_code=204)
+async def delete_user(
+    user_id: str,
+    admin: User = Depends(require_roles([UserRole.ADMIN])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Permanently delete a user. Admin cannot delete themselves."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.company_id == admin.company_id)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.delete(user)
+    await db.flush()

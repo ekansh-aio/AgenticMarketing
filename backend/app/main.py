@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from app.db.database import init_db
-from app.api.routes import auth, onboarding, users, advertisements, documents, analytics, brand_kit
+from app.api.routes import auth, onboarding, users, advertisements, documents, analytics, brand_kit, profile
 from app.core.config import settings
 
 
@@ -63,6 +63,7 @@ app.include_router(documents.router,      prefix="/api")
 app.include_router(advertisements.router, prefix="/api")
 app.include_router(analytics.router,      prefix="/api")
 app.include_router(brand_kit.router,      prefix="/api")
+app.include_router(profile.router,        prefix="/api")
 
 
 @app.get("/api/health")

@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     STATIC_DIR: str = "./static"
     STATIC_URL: str = "http://127.0.0.1:8000/static"
 
+    # SMTP — optional, for OTP email delivery.
+    # Leave SMTP_HOST empty to use dev-mode console logging instead.
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USER: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM: str = "noreply@agenticmarketing.com"
+    SMTP_TLS: bool = True
+
     class Config:
         env_file = ".env"
 
