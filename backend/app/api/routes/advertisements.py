@@ -778,7 +778,7 @@ async def provision_voice_agent(
 @router.get("/{ad_id}/voice-recommendation")
 async def get_voice_recommendation(
     ad_id: str,
-    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.STUDY_COORDINATOR])),
+    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -798,7 +798,7 @@ async def get_voice_recommendation(
 @router.get("/{ad_id}/voice-agent/status")
 async def get_voice_agent_status(
     ad_id: str,
-    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.STUDY_COORDINATOR])),
+    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     """Return ElevenLabs agent info for this campaign (name, voice, provisioned status)."""
@@ -834,7 +834,7 @@ async def get_voice_session_token(
 async def list_voice_conversations(
     ad_id: str,
     page_size: int = Query(20, ge=1, le=100),
-    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.STUDY_COORDINATOR])),
+    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     """List past voice call sessions for this campaign, fetched from ElevenLabs."""
@@ -849,7 +849,7 @@ async def list_voice_conversations(
 @router.get("/voice-conversations/{conversation_id}/transcript")
 async def get_voice_transcript(
     conversation_id: str,
-    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.STUDY_COORDINATOR])),
+    user: User = Depends(require_roles([UserRole.PUBLISHER, UserRole.ADMIN])),
     db: AsyncSession = Depends(get_db),
 ):
     """Fetch the full transcript and metadata for a single voice conversation."""

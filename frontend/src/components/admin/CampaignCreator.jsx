@@ -276,7 +276,7 @@ export default function CampaignCreator() {
 
   const handleGenerate = () => {
     startGeneration(createdAd.id, createdAd.title);
-    navigate("/study-coordinator");
+    navigate("/admin");
   };
 
   const websiteSelected = form.ad_types.includes("website");
