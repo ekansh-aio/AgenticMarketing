@@ -17,10 +17,10 @@ import {
 } from "lucide-react";
 
 const ROLES = [
-  { value: "admin",           label: "Admin",           icon: Settings },
-  { value: "reviewer",        label: "Reviewer",        icon: Eye },
-  { value: "ethics_reviewer", label: "Ethics Reviewer", icon: Shield },
-  { value: "publisher",       label: "Publisher",       icon: Send },
+  { value: "study_coordinator", label: "Study Coordinator", icon: Settings },
+  { value: "project_manager",   label: "Project Manager",   icon: Eye },
+  { value: "ethics_manager",    label: "Ethics Manager",    icon: Shield },
+  { value: "publisher",         label: "Publisher",         icon: Send },
 ];
 
 const ROLE_STYLE = {
@@ -174,7 +174,7 @@ export default function UserManagement() {
 
   const [users,    setUsers]    = useState([]);
   const [showForm, setShowForm] = useState(false);
-  const [form,     setForm]     = useState({ email: "", password: "", full_name: "", role: "reviewer" });
+  const [form,     setForm]     = useState({ email: "", password: "", full_name: "", role: "project_manager" });
   const [loading,  setLoading]  = useState(false);
   const [toDelete, setToDelete] = useState(null);   // user object pending deletion
   const [deleting, setDeleting] = useState(false);
@@ -190,39 +190,43 @@ export default function UserManagement() {
       const user = await usersAPI.create(form);
       setUsers((p) => [...p, user]);
       setShowForm(false);
-      setForm({ email: "", password: "", full_name: "", role: "reviewer" });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  // ── Change role ───────────────────────────────────────────────────────────
-  const handleRoleChange = async (userId, newRole) => {
-    try {
-      const updated = await usersAPI.changeRole(userId, newRole);
-      setUsers((prev) => prev.map((u) => u.id === userId ? updated : u));
-    } catch (err) {
-      setError(err.message);
-    }
-  };
 
-  // ── Delete user ───────────────────────────────────────────────────────────
-  const handleDeleteConfirm = async () => {
-    if (!toDelete) return;
-    setDeleting(true);
-    try {
-      await usersAPI.delete(toDelete.id);
-      setUsers((prev) => prev.filter((u) => u.id !== toDelete.id));
-      setToDelete(null);
-    } catch (err) {
-      setError(err.message);
-      setToDelete(null);
-    } finally {
-      setDeleting(false);
-    }
-  };
+setForm({ email: "", password: "", full_name: "", role: "project_manager" });
+} catch (err) {
+  setError(err.message);
+} finally {
+  setLoading(false);
+}
+// ── Change role ───────────────────────────────────────────────────────────
+const handleRoleChange = async (userId, newRole) => {
+  try {
+    const updated = await usersAPI.changeRole(userId, newRole);
+    setUsers((prev) =>
+      prev.map((u) => (u.id === userId ? updated : u))
+    );
+  } catch (err) {
+    setError(err.message);
+  }
+};
+
+// ── Delete user ───────────────────────────────────────────────────────────
+const handleDeleteConfirm = async () => {
+  if (!toDelete) return;
+  setDeleting(true);
+  try {
+    await usersAPI.delete(toDelete.id);
+    setUsers((prev) =>
+      prev.filter((u) => u.id !== toDelete.id)
+    );
+    setToDelete(null);
+  } catch (err) {
+    setError(err.message);
+    setToDelete(null);
+  } finally {
+    setDeleting(false);
+  }
+};
 
   return (
     <PageWithSidebar>

@@ -280,10 +280,14 @@ export default function EthicsDashboard() {
 
       <div className="page-header">
         <div>
-          <h1 className="page-header__title">Ethics Review</h1>
-          <p className="page-header__subtitle">
-            Generate content, flag ethical issues, request AI fixes, and clear campaigns for publishing
-          </p>
+
+
+        <h1 className="page-header__title">Ethics Manager Dashboard</h1>
+        <p className="page-header__subtitle">
+          Review campaigns, flag ethical issues, request AI fixes, and approve content for publishing
+        </p>
+
+
         </div>
       </div>
 
